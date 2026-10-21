@@ -3,9 +3,14 @@
 .idea
 .vscode
 target
+bin
+marketplace
+internal/api/generated.go
 .env
 .env.*
 *.log
+*.test
+coverage.out
 .DS_Store
 __pycache__
 .venv

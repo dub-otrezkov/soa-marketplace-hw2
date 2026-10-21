@@ -14,27 +14,43 @@ services:
       timeout: 3s
       retries: 20
     restart: unless-stopped
+  migrate:
+    build:
+      context: .
+      target: migrate
+    environment:
+      FLYWAY_URL: jdbc:postgresql://db:5432/marketplace
+      FLYWAY_USER: marketplace
+      FLYWAY_PASSWORD: ${POSTGRES_PASSWORD:-marketplace-local-dev}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
   api:
-    build: .
+    build:
+      context: .
+      target: app
     ports:
       - "127.0.0.1:${PORT:-8080}:8080"
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/marketplace
-      SPRING_DATASOURCE_USERNAME: marketplace
-      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-marketplace-local-dev}
+      PGHOST: db
+      PGPORT: "5432"
+      PGUSER: marketplace
+      PGDATABASE: marketplace
+      PGPASSWORD: ${POSTGRES_PASSWORD:-marketplace-local-dev}
       JWT_SECRET: ${JWT_SECRET:-local-development-only-secret-change-before-deploying-64characters}
       BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL-admin@example.test}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD-LocalAdminPass123!}
       ORDER_COOLDOWN_MINUTES: ${ORDER_COOLDOWN_MINUTES:-1}
     depends_on:
-      db:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--spider", "http://localhost:8080/actuator/health"]
       interval: 5s
       timeout: 3s
       retries: 30
-      start_period: 20s
+      start_period: 10s
     restart: unless-stopped
 volumes:
   postgres-data:

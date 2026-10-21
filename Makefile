@@ -1,31 +1,37 @@
-MAVEN_IMAGE := maven:3.9.11-eclipse-temurin-21
-MAVEN_VOLUME := soa-marketplace-maven
+GO ?= go
+GO_IMAGE := golang:1.26.10-alpine
 
 .PHONY: generate build test up down logs e2e demo clean
 
-# Copy the context instead of bind mounting: this also works with a remote Docker
-# daemon and Colima installations that do not share the workspace directory.
-define maven
+# Local Go is preferred. The Docker fallback copies the source instead of using
+# bind mounts, so it also works with remote daemons and restricted Colima shares.
+define run_go
 	@set -eu; \
-	container=$$(docker create -w /workspace -v $(MAVEN_VOLUME):/root/.m2 $(MAVEN_IMAGE) mvn --batch-mode --no-transfer-progress $(1)); \
-	trap 'docker rm -f "$$container" >/dev/null 2>&1' EXIT; \
-	docker cp pom.xml "$$container:/workspace/pom.xml"; \
-	docker cp src "$$container:/workspace/src"; \
-	docker start --attach "$$container"; \
-	status=$$(docker inspect --format '{{.State.ExitCode}}' "$$container"); \
-	mkdir -p target; \
-	docker cp "$$container:/workspace/target/." target/; \
-	exit "$$status"
+	if command -v "$(GO)" >/dev/null 2>&1; then \
+		mkdir -p internal/api; "$(GO)" $(1); \
+	else \
+		container=$$(docker create -w /workspace -v soa-marketplace-go-mod:/go/pkg/mod -v soa-marketplace-go-build:/root/.cache/go-build $(GO_IMAGE) sh -c 'mkdir -p internal/api && go $(1)'); \
+		trap 'docker rm -f "$$container" >/dev/null 2>&1' EXIT; \
+		for source in go.mod go.sum api internal cmd; do docker cp "$$source" "$$container:/workspace/$$source"; done; \
+		docker start --attach "$$container"; \
+		status=$$(docker inspect --format '{{.State.ExitCode}}' "$$container"); \
+		if [ "$$status" -eq 0 ]; then \
+			mkdir -p internal/api; \
+			docker cp "$$container:/workspace/internal/api/generated.go" internal/api/generated.go; \
+			if [ "$(2)" = "build" ]; then mkdir -p bin; docker cp "$$container:/workspace/bin/marketplace" bin/marketplace; fi; \
+		fi; \
+		exit "$$status"; \
+	fi
 endef
 
 generate:
-	$(call maven,generate-sources)
+	$(call run_go,generate ./api)
 
-build:
-	$(call maven,clean package)
+build: generate
+	$(call run_go,build -trimpath -o bin/marketplace ./cmd/marketplace,build)
 
-test:
-	$(call maven,clean verify)
+test: generate
+	$(call run_go,test ./...)
 
 up:
 	docker compose up --build --detach --wait
@@ -37,10 +43,10 @@ logs:
 	docker compose logs --follow api
 
 e2e:
-	python3 scripts/e2e.py
+	python3 scripts/e2e.py --db-checks
 
 demo:
 	bash scripts/demo.sh
 
 clean:
-	rm -rf target
+	rm -rf bin internal/api/generated.go

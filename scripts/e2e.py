@@ -514,8 +514,8 @@ class MarketplaceE2E(unittest.TestCase):
         self.assertTrue(fields, response)
         self.assertTrue(all(isinstance(item, dict) and item.get("field") and item.get("message")
                             for item in fields), response)
-        # Bean Validation exposes Java property paths, Jackson exposes JSON names.
-        # Both identify the concrete field; the contract does not mandate casing.
+        # Accept both JSON field names and property paths from contract validators;
+        # the contract requires a concrete field, without mandating its casing.
         wanted = field_fragment.replace("_", "").lower()
         self.assertTrue(any(wanted in item["field"].replace("_", "").lower() for item in fields), response)
 

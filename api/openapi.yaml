@@ -1,0 +1,1329 @@
+openapi: 3.0.3
+info:
+  title: SOA Marketplace API
+  version: 1.0.0
+  description: Contract-first marketplace homework 2. All business endpoints require
+    an access JWT. Every response contains a server-generated X-Request-Id. Requests
+    and API errors use JSON; unknown input fields are rejected. Monetary inputs use
+    at most two fractional digits; calculations use decimal arithmetic.
+servers:
+- url: http://localhost:8080
+  description: Local Docker Compose deployment
+tags:
+- name: Products
+- name: Orders
+- name: Auth
+- name: PromoCodes
+security:
+- bearerAuth: []
+paths:
+  /products:
+    post:
+      tags:
+      - Products
+      operationId: createProduct
+      summary: Create a product
+      description: SELLER and ADMIN. SELLER ownership is forced to the authenticated
+        seller; a different seller_id is rejected. ADMIN can choose seller_id.
+      responses:
+        '201':
+          description: Success
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProductCreate'
+    get:
+      tags:
+      - Products
+      operationId: listProducts
+      summary: List products
+      description: USER, SELLER and ADMIN can view all product states. Filters use
+        exact equality and combine with AND. Pagination is zero based; response totals
+        reflect filters.
+      responses:
+        '200':
+          description: Success
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+      parameters:
+      - name: page
+        in: query
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+          default: 0
+      - name: size
+        in: query
+        schema:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 100
+          default: 20
+      - name: status
+        in: query
+        schema:
+          $ref: '#/components/schemas/ProductStatus'
+      - name: category
+        in: query
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 100
+  /products/{id}:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+    get:
+      tags:
+      - Products
+      operationId: getProduct
+      summary: Get a product
+      description: USER, SELLER and ADMIN can view any product, including archived
+        products.
+      responses:
+        '200':
+          description: Success
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+    put:
+      tags:
+      - Products
+      operationId: updateProduct
+      summary: Replace product data
+      description: SELLER may update only its own products. ADMIN may update any product
+        and optionally change ownership. Atomic stock changes serialize with reservations.
+      responses:
+        '200':
+          description: Success
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProductUpdate'
+    delete:
+      tags:
+      - Products
+      operationId: archiveProduct
+      summary: Archive a product
+      description: SELLER may archive only its own products; ADMIN may archive any
+        product. Soft deletion sets ARCHIVED and preserves the row. Repeated archive
+        is idempotent.
+      responses:
+        '204':
+          description: Product archived; no response body.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+  /orders:
+    post:
+      tags:
+      - Orders
+      operationId: createOrder
+      summary: Create and reserve an order
+      description: 'USER and ADMIN. Checks execute in order: CREATE_ORDER cooldown,
+        existing CREATED/PAYMENT_PENDING order, product existence and ACTIVE state,
+        all stock shortages. A single transaction reserves stock, snapshots prices,
+        applies promo, stores CREATED order and operation. Promo validation failures
+        roll back stock and all writes.'
+      responses:
+        '201':
+          description: Success
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/PromoInvalid'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderCreate'
+  /orders/{id}:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+    get:
+      tags:
+      - Orders
+      operationId: getOrder
+      summary: Get an order
+      description: USER can read its own orders; ADMIN can read any order. SELLER
+        is denied. Foreign order access returns ORDER_OWNERSHIP_VIOLATION.
+      responses:
+        '200':
+          description: Success
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+    put:
+      tags:
+      - Orders
+      operationId: updateOrder
+      summary: Replace order items
+      description: USER can edit its own orders; ADMIN can edit any order. Requires
+        CREATED state, then UPDATE_ORDER cooldown. In one transaction return old stock,
+        validate and reserve replacement items, snapshot current prices, revalidate
+        promo and record operation. A no-longer-applicable promo is removed and its
+        use is returned. Any error rolls back the entire update.
+      responses:
+        '200':
+          description: Success
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/PromoInvalid'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderUpdate'
+  /orders/{id}/cancel:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+    post:
+      tags:
+      - Orders
+      operationId: cancelOrder
+      summary: Cancel an order
+      description: USER can cancel its own orders; ADMIN can cancel any order. Only
+        CREATED and PAYMENT_PENDING can transition to CANCELED. Stock and promo use
+        are returned once in the same transaction; a repeated cancellation returns
+        INVALID_STATE_TRANSITION.
+      responses:
+        '200':
+          description: Success
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+  /orders/{id}/status:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+    patch:
+      tags:
+      - Orders
+      operationId: transitionOrder
+      summary: Advance the order state
+      description: 'ADMIN only. Allowed transitions: CREATED → PAYMENT_PENDING → PAID
+        → SHIPPED → COMPLETED. Cancellation from CREATED/PAYMENT_PENDING also returns
+        stock and promo use transactionally. All other transitions, including self-transitions,
+        return INVALID_STATE_TRANSITION.'
+      responses:
+        '200':
+          description: Success
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderStatusUpdate'
+  /promo-codes:
+    post:
+      tags:
+      - PromoCodes
+      operationId: createPromoCode
+      summary: Create a promo code
+      description: SELLER and ADMIN only. Code is unique. valid_until must be later
+        than valid_from. New codes start with current_uses=0. Percentages greater
+        than 70 produce zero discount per assignment; fixed discounts are capped by
+        order subtotal.
+      responses:
+        '201':
+          description: Success
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromoCodeResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PromoCodeCreate'
+  /auth/register:
+    post:
+      tags:
+      - Auth
+      operationId: register
+      summary: Register a user or seller
+      description: Public. Only USER and SELLER may register; ADMIN is rejected with
+        VALIDATION_ERROR. Emails are case-insensitive and unique. Passwords are stored
+        only as salted hashes.
+      responses:
+        '201':
+          description: Success
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      security: []
+  /auth/login:
+    post:
+      tags:
+      - Auth
+      operationId: login
+      summary: Issue access and refresh tokens
+      description: Public. Returns a short-lived access JWT and a long-lived refresh
+        JWT. Credentials never appear in API logs.
+      responses:
+        '200':
+          description: Success
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      security: []
+  /auth/refresh:
+    post:
+      tags:
+      - Auth
+      operationId: refresh
+      summary: Refresh tokens
+      description: Public. Only a valid refresh token is accepted. Invalid, expired,
+        revoked, or access tokens return REFRESH_TOKEN_INVALID. Refresh-token rotation
+        prevents reuse.
+      responses:
+        '200':
+          description: Success
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/RefreshUnauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      security: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access JWT with sub=user id and role USER, SELLER or ADMIN. Refresh
+        tokens are not access credentials.
+  headers:
+    RequestId:
+      description: UUID generated by the server for each request.
+      schema:
+        type: string
+        format: uuid
+  responses:
+    BadRequest:
+      description: 'VALIDATION_ERROR: malformed JSON, unknown fields, invalid enum
+        or constraint violation; details identifies fields and violations.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error_code: VALIDATION_ERROR
+            message: VALIDATION_ERROR
+    Unauthorized:
+      description: TOKEN_INVALID or TOKEN_EXPIRED for missing/invalid/expired access
+        JWT; INVALID_CREDENTIALS for an incorrect login.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error_code: TOKEN_INVALID
+            message: TOKEN_INVALID or TOKEN_EXPIRED for missing/invalid/expired access
+              JWT; INVALID_CREDENTIALS for an incorrect login.
+    RefreshUnauthorized:
+      description: 'REFRESH_TOKEN_INVALID: invalid, expired, wrong-type or previously
+        consumed refresh JWT.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error_code: REFRESH_TOKEN_INVALID
+            message: REFRESH_TOKEN_INVALID
+    Forbidden:
+      description: ACCESS_DENIED for insufficient role/product ownership; ORDER_OWNERSHIP_VIOLATION
+        for another user’s order.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error_code: ACCESS_DENIED
+            message: ACCESS_DENIED for insufficient role/product ownership; ORDER_OWNERSHIP_VIOLATION
+              for another user’s order.
+    NotFound:
+      description: PRODUCT_NOT_FOUND or ORDER_NOT_FOUND, depending on the missing
+        resource; NOT_FOUND for an unknown endpoint.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error_code: PRODUCT_NOT_FOUND
+            message: PRODUCT_NOT_FOUND or ORDER_NOT_FOUND, depending on the missing
+              resource; NOT_FOUND for an unknown endpoint.
+    Conflict:
+      description: PRODUCT_INACTIVE, ORDER_HAS_ACTIVE, INVALID_STATE_TRANSITION, INSUFFICIENT_STOCK,
+        EMAIL_ALREADY_EXISTS or PROMO_CODE_ALREADY_EXISTS.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error_code: INSUFFICIENT_STOCK
+            message: PRODUCT_INACTIVE, ORDER_HAS_ACTIVE, INVALID_STATE_TRANSITION,
+              INSUFFICIENT_STOCK, EMAIL_ALREADY_EXISTS or PROMO_CODE_ALREADY_EXISTS.
+    PromoInvalid:
+      description: PROMO_CODE_INVALID when absent/inactive/expired/exhausted; PROMO_CODE_MIN_AMOUNT
+        when the subtotal is too low.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error_code: PROMO_CODE_INVALID
+            message: PROMO_CODE_INVALID when absent/inactive/expired/exhausted; PROMO_CODE_MIN_AMOUNT
+              when the subtotal is too low.
+    RateLimited:
+      description: 'ORDER_LIMIT_EXCEEDED: the configured cooldown since the last successful
+        operation of the same type has not elapsed.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error_code: ORDER_LIMIT_EXCEEDED
+            message: ORDER_LIMIT_EXCEEDED
+    MethodNotAllowed:
+      description: 'METHOD_NOT_ALLOWED: HTTP method is not supported for this endpoint.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    UnsupportedMediaType:
+      description: 'UNSUPPORTED_MEDIA_TYPE: requests with a body must use Content-Type
+        application/json.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    InternalError:
+      description: 'INTERNAL_ERROR: unexpected failure; details are hidden and request
+        id identifies the server log.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    ProductStatus:
+      type: string
+      enum:
+      - ACTIVE
+      - INACTIVE
+      - ARCHIVED
+    OrderStatus:
+      type: string
+      enum:
+      - CREATED
+      - PAYMENT_PENDING
+      - PAID
+      - SHIPPED
+      - COMPLETED
+      - CANCELED
+    Role:
+      type: string
+      enum:
+      - USER
+      - SELLER
+      - ADMIN
+    DiscountType:
+      type: string
+      enum:
+      - PERCENTAGE
+      - FIXED_AMOUNT
+    ErrorCode:
+      type: string
+      enum:
+      - PRODUCT_NOT_FOUND
+      - PRODUCT_INACTIVE
+      - ORDER_NOT_FOUND
+      - ORDER_LIMIT_EXCEEDED
+      - ORDER_HAS_ACTIVE
+      - INVALID_STATE_TRANSITION
+      - INSUFFICIENT_STOCK
+      - PROMO_CODE_INVALID
+      - PROMO_CODE_MIN_AMOUNT
+      - ORDER_OWNERSHIP_VIOLATION
+      - VALIDATION_ERROR
+      - TOKEN_EXPIRED
+      - TOKEN_INVALID
+      - REFRESH_TOKEN_INVALID
+      - ACCESS_DENIED
+      - EMAIL_ALREADY_EXISTS
+      - INVALID_CREDENTIALS
+      - PROMO_CODE_ALREADY_EXISTS
+      - NOT_FOUND
+      - METHOD_NOT_ALLOWED
+      - UNSUPPORTED_MEDIA_TYPE
+      - INTERNAL_ERROR
+    ProductCreate:
+      type: object
+      additionalProperties: false
+      required:
+      - name
+      - price
+      - stock
+      - category
+      - status
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          pattern: .*\S.*
+        description:
+          type: string
+          maxLength: 4000
+          nullable: true
+        price:
+          type: number
+          format: decimal
+          minimum: 0.01
+          maximum: 9999999999.99
+          multipleOf: 0.01
+          x-go-type: decimal.Decimal
+          x-go-type-import:
+            path: github.com/shopspring/decimal
+            name: decimal
+        stock:
+          type: integer
+          format: int32
+          minimum: 0
+        category:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: .*\S.*
+        status:
+          $ref: '#/components/schemas/ProductStatus'
+        seller_id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Optional for input. SELLER always owns its products; ADMIN
+            may select a seller, otherwise owns the product.
+    ProductUpdate:
+      type: object
+      additionalProperties: false
+      required:
+      - name
+      - price
+      - stock
+      - category
+      - status
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          pattern: .*\S.*
+        description:
+          type: string
+          maxLength: 4000
+          nullable: true
+        price:
+          type: number
+          format: decimal
+          minimum: 0.01
+          maximum: 9999999999.99
+          multipleOf: 0.01
+          x-go-type: decimal.Decimal
+          x-go-type-import:
+            path: github.com/shopspring/decimal
+            name: decimal
+        stock:
+          type: integer
+          format: int32
+          minimum: 0
+        category:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: .*\S.*
+        status:
+          $ref: '#/components/schemas/ProductStatus'
+        seller_id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Optional for input. SELLER always owns its products; ADMIN
+            may select a seller, otherwise owns the product.
+    ProductResponse:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - name
+      - price
+      - stock
+      - category
+      - status
+      - seller_id
+      - created_at
+      - updated_at
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          pattern: .*\S.*
+        description:
+          type: string
+          maxLength: 4000
+          nullable: true
+          x-omitempty: false
+        price:
+          type: number
+          format: decimal
+          minimum: 0.01
+          maximum: 9999999999.99
+          multipleOf: 0.01
+          x-go-type: decimal.Decimal
+          x-go-type-import:
+            path: github.com/shopspring/decimal
+            name: decimal
+        stock:
+          type: integer
+          format: int32
+          minimum: 0
+        category:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: .*\S.*
+        status:
+          $ref: '#/components/schemas/ProductStatus'
+        seller_id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Optional for input. SELLER always owns its products; ADMIN
+            may select a seller, otherwise owns the product.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ProductPage:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      - totalElements
+      - page
+      - size
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProductResponse'
+        totalElements:
+          type: integer
+          format: int64
+          minimum: 0
+        page:
+          type: integer
+          format: int32
+          minimum: 0
+        size:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 100
+    OrderItemRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - product_id
+      - quantity
+      properties:
+        product_id:
+          type: integer
+          format: int64
+          minimum: 1
+        quantity:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 999
+    OrderCreate:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderItemRequest'
+          minItems: 1
+          maxItems: 50
+          description: Repeated product IDs are aggregated; total quantity per product
+            must not exceed 999.
+        promo_code:
+          type: string
+          pattern: ^[A-Z0-9_]{4,20}$
+          nullable: true
+    OrderUpdate:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderItemRequest'
+          minItems: 1
+          maxItems: 50
+          description: Repeated product IDs are aggregated; total quantity per product
+            must not exceed 999.
+    OrderItemResponse:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - product_id
+      - quantity
+      - price_at_order
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        product_id:
+          type: integer
+          format: int64
+          minimum: 1
+        quantity:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 999
+        price_at_order:
+          type: number
+          format: decimal
+          minimum: 0.01
+          x-go-type: decimal.Decimal
+          x-go-type-import:
+            path: github.com/shopspring/decimal
+            name: decimal
+    OrderResponse:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - user_id
+      - status
+      - total_amount
+      - discount_amount
+      - created_at
+      - updated_at
+      - items
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        user_id:
+          type: integer
+          format: int64
+          minimum: 1
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+        promo_code_id:
+          type: integer
+          format: int64
+          minimum: 1
+          nullable: true
+          x-omitempty: false
+        total_amount:
+          type: number
+          format: decimal
+          minimum: 0
+          x-go-type: decimal.Decimal
+          x-go-type-import:
+            path: github.com/shopspring/decimal
+            name: decimal
+        discount_amount:
+          type: number
+          format: decimal
+          minimum: 0
+          x-go-type: decimal.Decimal
+          x-go-type-import:
+            path: github.com/shopspring/decimal
+            name: decimal
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderItemResponse'
+    OrderStatusUpdate:
+      type: object
+      additionalProperties: false
+      required:
+      - status
+      properties:
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+    PromoCodeCreate:
+      type: object
+      additionalProperties: false
+      required:
+      - code
+      - discount_type
+      - discount_value
+      - min_order_amount
+      - max_uses
+      - valid_from
+      - valid_until
+      - active
+      properties:
+        code:
+          type: string
+          pattern: ^[A-Z0-9_]{4,20}$
+        discount_type:
+          $ref: '#/components/schemas/DiscountType'
+        discount_value:
+          type: number
+          format: decimal
+          minimum: 0.01
+          maximum: 9999999999.99
+          multipleOf: 0.01
+          x-go-type: decimal.Decimal
+          x-go-type-import:
+            path: github.com/shopspring/decimal
+            name: decimal
+        min_order_amount:
+          type: number
+          format: decimal
+          minimum: 0
+          maximum: 9999999999.99
+          multipleOf: 0.01
+          x-go-type: decimal.Decimal
+          x-go-type-import:
+            path: github.com/shopspring/decimal
+            name: decimal
+        max_uses:
+          type: integer
+          format: int32
+          minimum: 1
+        valid_from:
+          type: string
+          format: date-time
+        valid_until:
+          type: string
+          format: date-time
+        active:
+          type: boolean
+      description: valid_until must be later than valid_from. A percentage greater
+        than 70 gives zero discount (the customer pays 100%); a fixed discount is
+        capped at the subtotal.
+    PromoCodeResponse:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - code
+      - discount_type
+      - discount_value
+      - min_order_amount
+      - max_uses
+      - valid_from
+      - valid_until
+      - active
+      - current_uses
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        code:
+          type: string
+          pattern: ^[A-Z0-9_]{4,20}$
+        discount_type:
+          $ref: '#/components/schemas/DiscountType'
+        discount_value:
+          type: number
+          format: decimal
+          minimum: 0.01
+          maximum: 9999999999.99
+          multipleOf: 0.01
+          x-go-type: decimal.Decimal
+          x-go-type-import:
+            path: github.com/shopspring/decimal
+            name: decimal
+        min_order_amount:
+          type: number
+          format: decimal
+          minimum: 0
+          maximum: 9999999999.99
+          multipleOf: 0.01
+          x-go-type: decimal.Decimal
+          x-go-type-import:
+            path: github.com/shopspring/decimal
+            name: decimal
+        max_uses:
+          type: integer
+          format: int32
+          minimum: 1
+        valid_from:
+          type: string
+          format: date-time
+        valid_until:
+          type: string
+          format: date-time
+        active:
+          type: boolean
+        current_uses:
+          type: integer
+          format: int32
+          minimum: 0
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - email
+      - password
+      - role
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 3
+          maxLength: 254
+        password:
+          type: string
+          minLength: 8
+          maxLength: 72
+          description: At most 72 UTF-8 bytes; bcrypt input limit.
+          writeOnly: true
+          x-go-type-skip-optional-pointer: true
+        role:
+          $ref: '#/components/schemas/Role'
+          description: Only USER and SELLER may self-register. ADMIN is rejected with
+            VALIDATION_ERROR; bootstrap configuration creates administrators.
+      description: Only USER and SELLER roles are permitted. Administrator accounts
+        are provisioned through server bootstrap configuration.
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - email
+      - password
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 3
+          maxLength: 254
+        password:
+          type: string
+          minLength: 1
+          maxLength: 72
+          description: At most 72 UTF-8 bytes; bcrypt input limit.
+          writeOnly: true
+          x-go-type-skip-optional-pointer: true
+    RefreshRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - refresh_token
+      properties:
+        refresh_token:
+          type: string
+          minLength: 1
+          writeOnly: true
+          x-go-type-skip-optional-pointer: true
+    TokenResponse:
+      type: object
+      additionalProperties: false
+      required:
+      - access_token
+      - refresh_token
+      - token_type
+      - expires_in
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        token_type:
+          type: string
+          example: Bearer
+        expires_in:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Access token lifetime in seconds.
+    UserResponse:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - email
+      - role
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        email:
+          type: string
+          format: email
+        role:
+          $ref: '#/components/schemas/Role'
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required:
+      - error_code
+      - message
+      properties:
+        error_code:
+          $ref: '#/components/schemas/ErrorCode'
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: Validation uses a fields array with field/message entries.
+            Stock errors identify product_id, requested_quantity and available_stock.

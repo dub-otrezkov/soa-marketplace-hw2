@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>ru.kozitskiy</groupId><artifactId>marketplace-migrations</artifactId><version>1.0.0</version><packaging>pom</packaging>
+  <build><plugins><plugin>
+    <groupId>org.flywaydb</groupId><artifactId>flyway-maven-plugin</artifactId><version>11.20.0</version>
+    <configuration>
+      <url>${env.FLYWAY_URL}</url><user>${env.FLYWAY_USER}</user><password>${env.FLYWAY_PASSWORD}</password>
+      <locations><location>filesystem:/flyway/sql</location></locations>
+      <connectRetries>30</connectRetries>
+      <cleanDisabled>true</cleanDisabled>
+    </configuration>
+    <dependencies>
+      <dependency><groupId>org.flywaydb</groupId><artifactId>flyway-database-postgresql</artifactId><version>11.20.0</version></dependency>
+      <dependency><groupId>org.postgresql</groupId><artifactId>postgresql</artifactId><version>42.7.8</version></dependency>
+    </dependencies>
+  </plugin></plugins></build>
+</project>

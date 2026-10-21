@@ -1,8 +1,13 @@
+/internal/api/generated.go
+/bin/
+/marketplace
 /target/
 /.idea/
 /.vscode/
 *.iml
 *.log
+*.test
+coverage.out
 .DS_Store
 .env
 .env.*
